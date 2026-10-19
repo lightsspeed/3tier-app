@@ -386,10 +386,8 @@
 </div>
 
 <script>
-  // ── Config ────────────────────────────────────────────────────────────────
-  // Backend URL — when running in K8s with frontend on port 80, backend is
-  // accessed via the NodePort. Set BACKEND_URL to override.
-  const BACKEND_URL = window.BACKEND_URL || 'http://localhost:3000';
+  // Backend URL — uses relative URL so Nginx reverse-proxies to backend-service
+  const BACKEND_URL = window.BACKEND_URL || '';
 
   // ── Helpers ───────────────────────────────────────────────────────────────
   const $ = id => document.getElementById(id);
