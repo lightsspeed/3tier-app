@@ -1,0 +1,469 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>3-Tier App — ArgoCD Rollback Demo</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:           #0a0e1a;
+      --surface:      #111827;
+      --surface2:     #1a2235;
+      --border:       #1e2d45;
+      --accent:       #6366f1;
+      --accent-glow:  rgba(99,102,241,0.35);
+      --green:        #10b981;
+      --red:          #ef4444;
+      --yellow:       #f59e0b;
+      --text:         #e2e8f0;
+      --text-muted:   #64748b;
+      --radius:       14px;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Inter', sans-serif;
+      min-height: 100vh;
+      overflow-x: hidden;
+    }
+
+    /* ── Background grid ───────────────────────────────── */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background-image:
+        linear-gradient(rgba(99,102,241,0.04) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(99,102,241,0.04) 1px, transparent 1px);
+      background-size: 40px 40px;
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    .container { max-width: 1100px; margin: 0 auto; padding: 0 24px; position: relative; z-index: 1; }
+
+    /* ── Header ────────────────────────────────────────── */
+    header {
+      padding: 32px 0 24px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+    .logo {
+      width: 44px; height: 44px;
+      background: linear-gradient(135deg, var(--accent), #8b5cf6);
+      border-radius: 10px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 22px;
+      box-shadow: 0 0 20px var(--accent-glow);
+    }
+    .header-text h1 { font-size: 1.4rem; font-weight: 700; }
+    .header-text p  { font-size: 0.82rem; color: var(--text-muted); margin-top: 2px; }
+
+    .version-badge {
+      margin-left: auto;
+      padding: 6px 14px;
+      border-radius: 999px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.78rem;
+      font-weight: 600;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      color: var(--accent);
+      display: flex; align-items: center; gap: 6px;
+    }
+    .version-dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: var(--green);
+      box-shadow: 0 0 6px var(--green);
+      animation: pulse 2s ease-in-out infinite;
+    }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+
+    /* ── Stats row ─────────────────────────────────────── */
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 16px;
+      margin: 28px 0;
+    }
+    .stat-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 20px 22px;
+      position: relative;
+      overflow: hidden;
+      transition: transform 0.2s, border-color 0.2s;
+    }
+    .stat-card:hover { transform: translateY(-2px); border-color: var(--accent); }
+    .stat-card::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 2px;
+      background: linear-gradient(90deg, var(--accent), #8b5cf6);
+    }
+    .stat-label { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-muted); font-weight: 600; }
+    .stat-value { font-size: 1.9rem; font-weight: 800; margin-top: 6px; font-family: 'JetBrains Mono', monospace; }
+    .stat-sub   { font-size: 0.75rem; color: var(--text-muted); margin-top: 4px; }
+
+    .stat-icon { position: absolute; top: 18px; right: 18px; font-size: 1.6rem; opacity: 0.2; }
+
+    /* ── Status indicator ──────────────────────────────── */
+    .status-indicator {
+      display: inline-flex; align-items: center; gap: 6px;
+      font-size: 0.78rem; font-weight: 600;
+      padding: 3px 10px; border-radius: 999px;
+    }
+    .status-indicator.healthy  { background: rgba(16,185,129,0.15); color: var(--green); }
+    .status-indicator.error    { background: rgba(239,68,68,0.15);  color: var(--red);   }
+    .status-indicator.loading  { background: rgba(245,158,11,0.15); color: var(--yellow);}
+    .status-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+
+    /* ── Section ───────────────────────────────────────── */
+    .section { margin-bottom: 28px; }
+    .section-header {
+      display: flex; align-items: center; gap: 10px;
+      margin-bottom: 14px; padding-bottom: 10px;
+      border-bottom: 1px solid var(--border);
+    }
+    .section-title { font-size: 0.95rem; font-weight: 700; }
+    .section-icon  { font-size: 1rem; }
+
+    /* ── Services grid ─────────────────────────────────── */
+    .services-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 14px;
+    }
+    @media (max-width: 600px) { .services-grid { grid-template-columns: 1fr; } }
+
+    .service-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 18px;
+      transition: border-color 0.25s, box-shadow 0.25s;
+    }
+    .service-card:hover { border-color: var(--accent); box-shadow: 0 0 20px var(--accent-glow); }
+    .service-name { font-size: 0.85rem; font-weight: 700; margin-bottom: 8px; display: flex; align-items: center; gap: 8px; }
+    .service-meta { font-size: 0.72rem; color: var(--text-muted); font-family: 'JetBrains Mono', monospace; }
+    .service-meta span { display: block; margin-top: 2px; }
+
+    /* ── Data table ────────────────────────────────────── */
+    .table-wrap {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+    table { width: 100%; border-collapse: collapse; }
+    thead th {
+      background: var(--surface2);
+      padding: 12px 16px;
+      text-align: left;
+      font-size: 0.72rem;
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      color: var(--text-muted);
+      font-weight: 600;
+    }
+    tbody tr {
+      border-top: 1px solid var(--border);
+      transition: background 0.15s;
+    }
+    tbody tr:hover { background: var(--surface2); }
+    tbody td { padding: 12px 16px; font-size: 0.84rem; }
+    .pill {
+      display: inline-block; padding: 2px 10px;
+      border-radius: 999px; font-size: 0.7rem; font-weight: 600;
+      background: rgba(16,185,129,0.15); color: var(--green);
+    }
+
+    /* ── Rollback timeline ─────────────────────────────── */
+    .timeline { list-style: none; position: relative; padding-left: 24px; }
+    .timeline::before {
+      content: ''; position: absolute;
+      left: 6px; top: 8px; bottom: 8px;
+      width: 2px; background: var(--border);
+    }
+    .timeline li {
+      position: relative; margin-bottom: 14px;
+      font-size: 0.83rem; color: var(--text-muted);
+    }
+    .timeline li::before {
+      content: ''; position: absolute;
+      left: -22px; top: 5px;
+      width: 10px; height: 10px; border-radius: 50%;
+      background: var(--surface2); border: 2px solid var(--border);
+    }
+    .timeline li.done::before  { background: var(--green);  border-color: var(--green);  box-shadow: 0 0 6px var(--green); }
+    .timeline li.fail::before  { background: var(--red);    border-color: var(--red);    box-shadow: 0 0 6px var(--red); }
+    .timeline li.wait::before  { background: var(--yellow); border-color: var(--yellow); animation: pulse 1.5s infinite; }
+    .timeline li strong { color: var(--text); }
+
+    /* ── Footer ────────────────────────────────────────── */
+    footer {
+      padding: 24px 0;
+      border-top: 1px solid var(--border);
+      text-align: center;
+      font-size: 0.75rem;
+      color: var(--text-muted);
+    }
+
+    /* ── Refresh bar ───────────────────────────────────── */
+    .refresh-bar {
+      position: fixed; bottom: 20px; right: 20px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 10px 16px;
+      font-size: 0.75rem;
+      display: flex; align-items: center; gap: 8px;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+      z-index: 100;
+    }
+    .refresh-btn {
+      padding: 5px 12px; border-radius: 8px;
+      background: var(--accent); border: none;
+      color: white; font-size: 0.73rem; font-weight: 600;
+      cursor: pointer; font-family: 'Inter', sans-serif;
+      transition: opacity 0.2s;
+    }
+    .refresh-btn:hover { opacity: 0.85; }
+
+    /* ── Skeleton loader ───────────────────────────────── */
+    .skeleton {
+      background: linear-gradient(90deg, var(--surface2) 25%, var(--border) 50%, var(--surface2) 75%);
+      background-size: 200% 100%;
+      animation: shimmer 1.5s infinite;
+      border-radius: 6px; height: 16px; margin: 4px 0;
+    }
+    @keyframes shimmer { 0%{background-position:200% 0} 100%{background-position:-200% 0} }
+  </style>
+</head>
+<body>
+<div class="container">
+
+  <!-- ── Header ─────────────────────────────────────────────────────── -->
+  <header>
+    <div class="logo">🚀</div>
+    <div class="header-text">
+      <h1>3-Tier App — ArgoCD Rollback Demo</h1>
+      <p>Frontend → Backend (Node.js) → PostgreSQL</p>
+    </div>
+    <div class="version-badge" id="versionBadge">
+      <span class="version-dot"></span>
+      <span id="versionText">Loading…</span>
+    </div>
+  </header>
+
+  <!-- ── Stats row ──────────────────────────────────────────────────── -->
+  <div class="stats-grid" id="statsGrid">
+    <div class="stat-card">
+      <div class="stat-icon">🏥</div>
+      <div class="stat-label">Backend Health</div>
+      <div class="stat-value" id="healthStatus"><div class="skeleton" style="width:80px;height:30px"></div></div>
+      <div class="stat-sub" id="healthUptime">—</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-icon">🗄️</div>
+      <div class="stat-label">Database</div>
+      <div class="stat-value" id="dbStatus"><div class="skeleton" style="width:80px;height:30px"></div></div>
+      <div class="stat-sub">PostgreSQL 15</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-icon">📦</div>
+      <div class="stat-label">Records</div>
+      <div class="stat-value" id="recordCount"><div class="skeleton" style="width:40px;height:30px"></div></div>
+      <div class="stat-sub">Items in DB</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-icon">🕐</div>
+      <div class="stat-label">Last Polled</div>
+      <div class="stat-value" style="font-size:1.1rem" id="lastPolled">—</div>
+      <div class="stat-sub">Auto-refresh: 5s</div>
+    </div>
+  </div>
+
+  <!-- ── Services ───────────────────────────────────────────────────── -->
+  <div class="section">
+    <div class="section-header">
+      <span class="section-icon">⚙️</span>
+      <span class="section-title">Service Tiers</span>
+    </div>
+    <div class="services-grid">
+      <div class="service-card">
+        <div class="service-name">🌐 Frontend</div>
+        <div class="status-indicator healthy"><span class="status-dot"></span>Running</div>
+        <div class="service-meta" style="margin-top:10px">
+          <span>Image: three-tier-frontend:v1</span>
+          <span>Server: Nginx 1.25</span>
+          <span>Port: 80</span>
+        </div>
+      </div>
+      <div class="service-card">
+        <div class="service-name">⚡ Backend</div>
+        <div id="backendStatus" class="status-indicator loading"><span class="status-dot"></span>Checking…</div>
+        <div class="service-meta" style="margin-top:10px">
+          <span>Image: three-tier-backend:<span id="beVersion">…</span></span>
+          <span>Runtime: Node.js 20</span>
+          <span>Port: 3000</span>
+        </div>
+      </div>
+      <div class="service-card">
+        <div class="service-name">🗄️ Database</div>
+        <div id="dbStatusBadge" class="status-indicator loading"><span class="status-dot"></span>Checking…</div>
+        <div class="service-meta" style="margin-top:10px">
+          <span>Image: postgres:15</span>
+          <span>Engine: PostgreSQL</span>
+          <span>Port: 5432</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Data table ─────────────────────────────────────────────────── -->
+  <div class="section">
+    <div class="section-header">
+      <span class="section-icon">📋</span>
+      <span class="section-title">Database Records</span>
+      <span id="recordBadge" style="margin-left:auto;font-size:0.75rem;color:var(--text-muted)">—</span>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Name</th>
+            <th>Status</th>
+            <th>Created At</th>
+          </tr>
+        </thead>
+        <tbody id="tableBody">
+          <tr><td colspan="4" style="text-align:center;padding:24px;color:var(--text-muted)">Loading data…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ── Rollback Timeline ───────────────────────────────────────────── -->
+  <div class="section">
+    <div class="section-header">
+      <span class="section-icon">♻️</span>
+      <span class="section-title">ArgoCD Rollback Test — Event Timeline</span>
+    </div>
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:22px">
+      <ul class="timeline">
+        <li class="done"><strong>Step 1 — Deploy v1</strong>: ArgoCD syncs healthy image → pods Running ✅</li>
+        <li class="done"><strong>Step 2 — Observe healthy state</strong>: All 3 tiers up, frontend serving this page ✅</li>
+        <li id="step3" class="wait"><strong>Step 3 — Push broken image tag</strong>: Update GitOps repo → backend:v2-broken (non-existent tag)</li>
+        <li id="step4"><strong>Step 4 — ArgoCD syncs</strong>: Pod enters <code style="color:var(--red);font-family:'JetBrains Mono',monospace">ImagePullBackOff</code> → App health = Degraded</li>
+        <li id="step5"><strong>Step 5 — Rollback triggered</strong>: <code style="font-family:'JetBrains Mono',monospace">argocd app rollback three-tier-app</code></li>
+        <li id="step6"><strong>Step 6 — v1 restored</strong>: Backend returns to healthy state ✅</li>
+      </ul>
+    </div>
+  </div>
+
+  <footer>
+    ArgoCD Rollback Demo &nbsp;·&nbsp; 3-Tier App (Frontend / Backend / PostgreSQL) &nbsp;·&nbsp; Built for GitOps testing
+  </footer>
+</div>
+
+<!-- ── Refresh indicator ──────────────────────────────────────────────── -->
+<div class="refresh-bar">
+  <span>🔄</span>
+  <span style="color:var(--text-muted)">Auto-refreshing every 5s</span>
+  <button class="refresh-btn" onclick="fetchAll()">Refresh Now</button>
+</div>
+
+<script>
+  // ── Config ────────────────────────────────────────────────────────────────
+  // Backend URL — when running in K8s with frontend on port 80, backend is
+  // accessed via the NodePort. Set BACKEND_URL to override.
+  const BACKEND_URL = window.BACKEND_URL || 'http://localhost:3000';
+
+  // ── Helpers ───────────────────────────────────────────────────────────────
+  const $ = id => document.getElementById(id);
+
+  function setStatus(el, type, text) {
+    if (!el) return;
+    el.className = `status-indicator ${type}`;
+    el.innerHTML = `<span class="status-dot"></span>${text}`;
+  }
+
+  function fmt(ts) {
+    if (!ts) return '—';
+    return new Date(ts).toLocaleTimeString();
+  }
+
+  // ── Fetch all data ────────────────────────────────────────────────────────
+  async function fetchAll() {
+    $('lastPolled').textContent = new Date().toLocaleTimeString();
+
+    // Health
+    try {
+      const r = await fetch(`${BACKEND_URL}/health`, { signal: AbortSignal.timeout(4000) });
+      const d = await r.json();
+
+      $('versionText').textContent = d.version || 'v1';
+      $('beVersion').textContent   = d.version || 'v1';
+      $('healthStatus').textContent = '●  OK';
+      $('healthStatus').style.color = 'var(--green)';
+      $('healthUptime').textContent = `Uptime: ${d.uptime}`;
+
+      setStatus($('backendStatus'), 'healthy', 'Healthy');
+
+      const dbOk = d.db === 'connected';
+      setStatus($('dbStatusBadge'), dbOk ? 'healthy' : 'error', dbOk ? 'Connected' : 'Disconnected');
+      $('dbStatus').textContent = dbOk ? '● Up' : '● Down';
+      $('dbStatus').style.color = dbOk ? 'var(--green)' : 'var(--red)';
+
+    } catch (err) {
+      $('healthStatus').textContent = '✕ Down';
+      $('healthStatus').style.color = 'var(--red)';
+      setStatus($('backendStatus'), 'error', 'Unreachable');
+      setStatus($('dbStatusBadge'), 'error', 'Unknown');
+    }
+
+    // Data
+    try {
+      const r  = await fetch(`${BACKEND_URL}/api/data`, { signal: AbortSignal.timeout(4000) });
+      const d  = await r.json();
+      const rows = d.items || [];
+
+      $('recordCount').textContent = rows.length;
+      $('recordBadge').textContent = `${rows.length} record${rows.length !== 1 ? 's' : ''} found`;
+
+      $('tableBody').innerHTML = rows.length
+        ? rows.map(item => `
+            <tr>
+              <td style="font-family:'JetBrains Mono',monospace;color:var(--text-muted)">${item.id}</td>
+              <td><strong>${item.name}</strong></td>
+              <td><span class="pill">${item.status || 'active'}</span></td>
+              <td style="color:var(--text-muted)">${fmt(item.created_at)}</td>
+            </tr>`).join('')
+        : `<tr><td colspan="4" style="text-align:center;padding:24px;color:var(--text-muted)">No records found</td></tr>`;
+
+    } catch {
+      $('tableBody').innerHTML =
+        `<tr><td colspan="4" style="text-align:center;padding:24px;color:var(--red)">
+          ⚠ Backend unreachable — checking for rollback…
+        </td></tr>`;
+    }
+  }
+
+  // ── Boot ──────────────────────────────────────────────────────────────────
+  fetchAll();
+  setInterval(fetchAll, 5000);
+</script>
+</body>
+</html>
